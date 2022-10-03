@@ -1,0 +1,212 @@
+---
+- name: 'Basic setup | Provision Amadla Image'
+  hosts: all
+  any_errors_fatal: true # stop if anything is wrong
+  gather_facts: true
+  become: true # Means become `root` if set with true
+  become_user: root
+  become_method: sudo
+  vars:
+    user_username: "{{ lookup('env','USER_USERNAME') }}"
+    user_server_password: "{{ lookup('env','USER_SERVER_PASSWORD') }}"
+  collections:
+    - devsec.hardening
+  tasks:
+
+    # Asserts (fail fast)
+    #| awk '{ print ($1 == "debian") ? $1 : "" }'
+
+    - name: Test that the base image is truly debian distro
+      shell: cat /etc/os-release | grep ID= | grep -vi version | awk -F "=" '{print $2}'
+      register: result
+      changed_when: result == "debian"
+      failed_when: False
+    - debug: var=result
+    
+    - name: Test codename of Debian
+      shell: cat /etc/os-release | grep -i version_codename | awk -F "=" '{print $2}'
+      register: result
+      changed_when: result == "buster"
+      failed_when: False
+    - debug: var=result
+
+    # Maybe use in the futur a test for `cat /etc/debian_version`
+
+    #@TODO Use bash script to verify version with `>=` should be in one of my bash scripts
+    #@TODO Check if the variables are set correctly
+
+    #@TODO Log `uname -r` so to keep track in case issues arrise
+    
+    #@TODO Add Kernel configue for network (number of connections)
+    #@TODO Add Kernel configue for heavy filesystem usage apps like hadoop, mango, etc (maybe use RedHat script and/or Mongo db doc)
+    #@TODO Check for swap
+    #@TODO Check in the previous bash scripts if I was testing for anything else in the env.
+
+    #@TODO move code from packer to here
+    #@TODO copy script for deleting image and container
+    
+    #@TODO Test: egrep "^UID_MIN|^UID_MAX" /etc/login.defs
+    #@TODO Test: Get a given user's home path: cat /etc/passwd | grep vault | awk -F ":" '{ print $6 }'
+
+    # The setup of packages and update of packages with apt
+    # @link: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/apt_module.html
+
+    # == `apt update`
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    # @TODO Change the source.list file. It seems to be custom for the diff clouds service.
+    # @TODO Add the deb http://security.debian.org/debian-security buster/updates main contrib non-free
+
+    - name: Verify that debian-security is in the source.list file
+      shell: 'cat /etc/apt/sources.list | grep debian-security | grep -v "#" | grep "buster/updates"'
+      args:
+        executable: /bin/bash
+      register: result
+      changed_when: result.rc != 0
+      failed_when: False
+    - debug: var=result
+
+    # Make sure all the packages are updated to the lastest version
+    - name: Update all packages to their latest version
+      apt:
+         name: "*"
+         state: latest
+
+    #@TODO might not need it for Bastion. Add it only for testing and for debugging.
+    # The SELinux packages: selinux-basics selinux-policy-default auditd 
+    - name: Install basic packages
+      apt:
+        pkg:
+        - curl
+        - htop
+        - gnupg2
+        - selinux-basics # The current version causes issue
+        - selinux-policy-default # They are othe rpackages for othe policies for specific files/syst./etc
+        - auditd # Great tools to audit the system
+        - attr # To be able to use `getfattr`
+        state: latest
+
+    # After updating and installing new packages you might have packages that are not useful anymore
+    # this will remove them
+    - name: Remove useless packages from the cache
+      apt:
+        autoclean: yes
+
+    # @NOTE: You need to reboot for SELinux enabling to take affect
+    - name: Activate SELinux
+      shell: selinux-activate
+      args:
+        executable: /bin/bash
+
+    # It might send an error but SELinux might still work correctly in this env
+    # This is for logs to investigate if there is any weird issues that show up in this
+    # env with SELinux
+    - name: Check SELinux installation
+      shell: check-selinux-installation
+      args:
+        executable: /bin/bash
+      register: resultSeLinuxCheck
+      ignore_errors: True
+    - debug: var=resultSeLinuxCheck
+
+    # If not enabled it should cause a stop.
+    # SELinux will become an important part of the envs.
+    - name: Is SELinux status enabled?
+      shell: "sestatus | grep -i selinux | grep -i status | awk '{ print $3 }'"
+      args:
+        executable: /bin/bash
+      register: resultSELinuxStatus
+      changed_when: resultSELinuxStatus == "enabled"
+      failed_when: False
+  
+    # Since the root user is ban from connecting with SSH a new user needs to be created
+
+    # This where the user that will be used to ssh into the server will be added
+    - name: Add `amadla` user
+      user:
+        name: "{{ user_username }}"
+        comment: User creation
+        shell: /bin/bash
+        password: "{{ user_server_password | password_hash('sha512') }}"
+        groups: sudo
+        append: yes
+        #update_password: on_create # Only change the password when creating the user (should not be used)
+ 
+    - name: Create the `.amadla` directory for the settings files
+      file:
+        path: "/home/{{ lookup('env','USER_USERNAME') }}/.amadla"
+        state: directory
+        mode: '0755'
+
+    - name: Create the `.amadla/secrets` directory for the settings files
+      file:
+        path: "/home/{{ lookup('env','USER_USERNAME') }}/.amadla/secrets"
+        state: directory
+        mode: '0755'
+
+    - name: Add `.ssh` directory
+      file:
+        path: "/home/{{ lookup('env','USER_USERNAME') }}/.ssh/"
+        state: directory
+        mode: '0755'
+
+    #@TODO Change `root`
+    # Adding public SSH key so user and utils can connect to the new server
+    - name: Add ssh public key to authorized_keys of the user goin
+      shell: "echo \"$(</root/.amadla/secrets/id_rsa.pub)\" >> /home/{{ lookup('env','USER_USERNAME') }}/.ssh/authorized_keys"
+      args:
+        executable: /bin/bash
+      register: resulttwo
+      #ignore_errors: True
+    - debug: var=resulttwo
+
+     # 
+     # Note: OpenSSH 6.8 changed the default fingerprint format from hex MD5 to base64 SHA256.
+     #
+     # To test Key: $ ansible web -a "ssh-add -l" (p.371-372 (the box thing))
+     #
+    - name: Copy known hosts file
+      copy: src=config/known_hosts dest="/home/{{ lookup('env','USER_USERNAME') }}/.ssh/known_hosts" mode=0600
+
+    # Hardening
+
+    - import_role:
+        name: os_hardening
+
+    - import_role:
+        name: ssh_hardening 
+
+    - name: Test that PAM has the right password hashing
+      shell: cat /etc/pam.d/common-password | grep -i ^password | grep -v "#" | grep -i pam_unix.so | grep -i success | awk 'END {print $NF}'
+      register: result
+      changed_when: result == "sha512"
+      failed_when: False
+
+    - name: Test that /etc/login.defs has the right password hashing
+      shell: cat /etc/login.defs | grep ENCRYPT_METHOD | grep -v "#" | awk '{print $2}' | tr '[A-Z]' '[a-z]'
+      register: result
+      changed_when: result == "sha512"
+      failed_when: False
+
+    # @TODO change it with ssh_hardening variable
+
+    - name: Add goin user in sshd_config
+      shell: "echo \"AllowUsers {{ lookup('env','USER_USERNAME') }}\" >> /etc/ssh/sshd_config"
+      args:
+        executable: /bin/bash
+      register: addsshd
+      ignore_errors: True
+    - debug: var=addsshd
+
+    - name: Enable SELinux
+      ansible.posix.selinux:
+        policy: targeted
+        state: enforcing
+
+    #@TODO Verify if needed
+    - name: Change the SELinux mode in /etc/selinux/config
+      shell: "sed -i 's/SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config"
+      args:
+        executable: /bin/bash
