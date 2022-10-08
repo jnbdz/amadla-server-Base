@@ -100,6 +100,13 @@
       args:
         executable: /bin/bash
 
+    # @TODO: 1000 is the user id should be pass with variable.
+    # @TODO: Create a user and get the user id.
+    - name: Loginctl enable linger
+      shell: loginctl enable-linger 1000
+      args:
+        executable: /bin/bash
+
     # It might send an error but SELinux might still work correctly in this env
     # This is for logs to investigate if there is any weird issues that show up in this
     # env with SELinux
