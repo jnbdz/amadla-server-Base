@@ -86,6 +86,7 @@
         - selinux-policy-default # They are othe rpackages for othe policies for specific files/syst./etc
         - auditd # Great tools to audit the system
         - attr # To be able to use `getfattr`
+        - systemd-container
         state: latest
 
     # After updating and installing new packages you might have packages that are not useful anymore
