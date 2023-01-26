@@ -101,10 +101,18 @@
       #ignore_errors: True
     - debug: var=resulttwo
 
+    # 
+    # Note: OpenSSH 6.8 changed the default fingerprint format from hex MD5 to base64 SHA256.
+    #
+    # To test Key: $ ansible web -a "ssh-add -l" (p.371-372 (the box thing))
+    #
+    #- name: Copy known hosts file
+    #  copy: src=config/known_hosts dest="/home/{{ lookup('env','USER_USERNAME') }}/.ssh/known_hosts" mode=0600
+
     # Hardening
 
     - import_role:
         name: os_hardening
 
-    - import_role:
-        name: ssh_hardening 
+    #- import_role:
+    #    name: ssh_hardening 
